@@ -19,6 +19,7 @@ class AgentState(TypedDict):
     evidence: List[dict]
     retry_count: int
     response: dict
+    application: str
 
 
 def retrieve(state: AgentState):
@@ -59,53 +60,67 @@ def route_after_validation(state: AgentState):
 
 def generate_answer(state: AgentState):
     evidence_text = "\n\n".join(
-        [
-            f'ID: {item["id"]}\n'
-            f'Type: {item["source_type"]}\n'
-            f'Content: {item["text"]}\n'
-            f'Possibly outdated: {item.get("possibly_outdated", False)}'
-            for item in state.get("evidence", [])
-        ]
-    )
+    [
+        f'ID: {item["id"]}\n'
+        f'Type: {item["source_type"]}\n'
+        f'Application: {item.get("application", "")}\n'
+        f'Content: {item["text"]}\n'
+        f'URL: {item.get("url", "")}\n'
+        f'Agent instruction: {item.get("agent_instruction", "")}\n'
+        f'Escalation instruction: {item.get("escalation_instruction", "")}\n'
+        f'Possibly outdated: {item.get("possibly_outdated", False)}'
+        for item in state.get("evidence", [])
+    ]
+)
 
     prompt = f"""
-You are a controlled support-ticket resolution assistant.
+    You are a controlled support-ticket resolution assistant.
 
-New ticket:
-{state["ticket"]}
+    New ticket:
+    {state["ticket"]}
 
-Retrieved evidence:
-{evidence_text}
+    Retrieved evidence:
+    {evidence_text}
 
-Use only the retrieved evidence.
-Do not invent information.
-Do not make system changes.
-Recommend escalation if evidence is insufficient.
+    Use only the retrieved evidence.
+    Do not invent information.
+    Do not make system changes.
+    Do not close the ticket.
+    Recommend escalation if the evidence is weak or missing.
 
-Return JSON using exactly these fields:
+    Return a JSON object with exactly these field names:
 
-{{
-  "summary": "short explanation",
-  "diagnostic_steps": ["step 1"],
-  "recommended_resolution": ["step 1"],
-  "evidence": [
-    {{
-      "source_id": "INC-1001",
-      "source_type": "ticket",
-      "reason": "why this source is relevant"
-    }}
-  ],
-  "outdated_warnings": [],
-  "should_escalate": false,
-  "escalation_reason": "",
-  "confidence": 0.85
-}}
+    summary
+    category
+    application
+    diagnostic_steps
+    recommended_resolution
+    agent_instructions
+    evidence
+    outdated_warnings
+    should_escalate
+    escalation_reason
+    escalation_information
+    confidence
 
-diagnostic_steps must be an array.
-recommended_resolution must be an array.
-evidence must be an array of objects.
-confidence must be a number between 0 and 1.
-"""
+    Formatting rules:
+
+    - summary must be a string.
+    - category must be a string.
+    - application must be a string.
+    - diagnostic_steps must be an array of strings.
+    - recommended_resolution must be an array of strings.
+    - agent_instructions must be an array of strings.
+    - evidence must be an array of objects.
+    - Each evidence object must contain source_id, source_type, reason, title, and url.
+    - outdated_warnings must be an array of strings.
+    - should_escalate must be true or false.
+    - escalation_reason must be a string.
+    - escalation_information must be an array of strings.
+    - confidence must be a number between 0 and 1.
+    - Do not return confidence as low, medium, or high.
+    - Do not invent KB IDs or URLs.
+    """
 
     response = client.chat.completions.create(
         model="gpt-4o-mini",
@@ -142,15 +157,39 @@ confidence must be a number between 0 and 1.
         evidence_list.append({
             "source_id": item.get(
                 "source_id",
-                item.get("ID", item.get("id", "UNKNOWN"))
+                item.get(
+                    "ID",
+                    item.get("id", "UNKNOWN")
+                )
             ),
+
             "source_type": item.get(
                 "source_type",
-                item.get("Type", item.get("type", "unknown"))
+                item.get(
+                    "Type",
+                    item.get("type", "unknown")
+                )
             ),
+
             "reason": item.get(
                 "reason",
                 "Retrieved as relevant evidence."
+            ),
+
+            "title": item.get(
+                "title",
+                item.get(
+                    "Title",
+                    ""
+                )
+            ),
+
+            "url": item.get(
+                "url",
+                item.get(
+                    "URL",
+                    ""
+                )
             )
         })
 
@@ -169,25 +208,62 @@ confidence must be a number between 0 and 1.
         )
 
     parsed = AssistantResponse(
-        summary=raw.get("summary", ""),
+        summary=raw.get(
+            "summary",
+            ""
+        ),
+        category=raw.get(
+            "category",
+            state.get("category", "")
+        ),
+        application=raw.get(
+            "application",
+            state.get("application", "")
+        ),
         diagnostic_steps=make_list(
-            raw.get("diagnostic_steps", [])
+            raw.get(
+                "diagnostic_steps",
+                []
+            )
         ),
         recommended_resolution=make_list(
-            raw.get("recommended_resolution", [])
+            raw.get(
+                "recommended_resolution",
+                []
+            )
+        ),
+        agent_instructions=make_list(
+            raw.get(
+                "agent_instructions",
+                []
+            )
         ),
         evidence=evidence_list,
         outdated_warnings=make_list(
-            raw.get("outdated_warnings", [])
+            raw.get(
+                "outdated_warnings",
+                []
+            )
         ),
         should_escalate=bool(
-            raw.get("should_escalate", False)
+            raw.get(
+                "should_escalate",
+                False
+            )
         ),
         escalation_reason=raw.get(
             "escalation_reason",
             ""
         ),
-        confidence=float(confidence)
+        escalation_information=make_list(
+            raw.get(
+                "escalation_information",
+                []
+            )
+        ),
+        confidence=float(
+            confidence
+        )
     )
 
     return {
@@ -218,12 +294,13 @@ def build_graph():
     return graph.compile()
 
 
-def analyse_ticket(ticket: str, category: str):
+def analyse_ticket(ticket: str, category: str, application: str):
     graph = build_graph()
 
     result = graph.invoke({
         "ticket": ticket,
         "category": category,
+        "application": application,
         "evidence": [],
         "retry_count": 0,
         "response": {}

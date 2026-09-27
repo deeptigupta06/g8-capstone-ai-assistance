@@ -11,8 +11,30 @@ from src.data_loader import load_all_data
 load_dotenv()
 
 client = OpenAI()
-tickets, documents = load_all_data()
+tickets, documents, knowledge_base = load_all_data()
 all_records = []
+
+for article in knowledge_base:
+    all_records.append({
+        "id": article["id"],
+        "source_type": "knowledge_base",
+        "text": (
+            f'{article["title"]}. '
+            f'{article["problem"]}. '
+            f'{article["symptoms"]}. '
+            f'{" ".join(article["resolution_steps"])}'
+        ),
+        "category": article["category"],
+        "application": article["application"],
+        "last_updated": article["last_updated"],
+        "validity_period_days": article["validity_period_days"],
+        "url": article["url"],
+        "agent_instruction": article["agent_instruction"],
+        "escalation_instruction": article[
+            "escalation_instruction"
+        ],
+        "resolution_steps": article["resolution_steps"]
+    })
 
 for ticket in tickets:
     all_records.append({
@@ -177,3 +199,10 @@ def hybrid_search(query, category=None, limit=5):
             result["possibly_outdated"] = False
 
     return results[:limit]
+
+def get_source_details(source_id):
+    for record in all_records:
+        if record["id"] == source_id:
+            return record
+
+    return None
