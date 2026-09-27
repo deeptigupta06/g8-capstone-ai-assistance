@@ -1,0 +1,11 @@
+openai
+python-dotenv
+pydantic
+streamlit
+chromadb
+rank-bm25
+langgraph
+langchain
+langchain-openai
+pandas
+scikit-learn
